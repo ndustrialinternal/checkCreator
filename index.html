@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Check Creator</title>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 1rem; 
+      max-width: 800px; 
+      margin: 2rem auto; 
+    }
+    h1 { 
+      text-align: center; 
+      margin-bottom: 2rem; 
+      color: #333;
+    }
+
+    /* Form styling */
+    .form-container {
+      background: #f9f9f9;
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+    
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+    
+    label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 0.5rem;
+      color: #333;
+    }
+    
+    input[type="text"], textarea, select {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+      box-sizing: border-box;
+    }
+    
+    textarea {
+      height: 100px;
+      resize: vertical;
+    }
+    
+    select:disabled {
+      background-color: #f5f5f5;
+      color: #666;
+    }
+    
+    .submit-container {
+      text-align: center;
+      margin-top: 2rem;
+    }
+    
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 1rem 2rem;
+      font-size: 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background: #0056b3;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    /* Status messages */
+    .loading, .error, .success { 
+      text-align: center; 
+      margin: 1rem 0; 
+      padding: 1rem;
+      border-radius: 4px;
+    }
+    .loading { 
+      background: #e3f2fd; 
+      color: #1976d2; 
+    }
+    .error { 
+      background: #ffebee; 
+      color: #d32f2f; 
+    }
+    .success { 
+      background: #e8f5e8; 
+      color: #2e7d32; 
+    }
+    
+    .hide { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Check Creator</h1>
+
+  <div class="form-container">
+    <!-- Organization selector -->
+    <div class="form-group">
+      <label for="org-select">Organization</label>
+      <select id="org-select">
+        <option value="">Select Organization</option>
+      </select>
+    </div>
+
+    <!-- Check form fields -->
+    <div class="form-group">
+      <label for="name-input">Name *</label>
+      <input type="text" id="name-input" placeholder="Enter check name" required />
+    </div>
+
+    <div class="form-group">
+      <label for="description-input">Description</label>
+      <textarea id="description-input" placeholder="Enter check description"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label for="package-select">Software Package</label>
+      <select id="package-select" disabled>
+        <option value="">Select Organization First</option>
+      </select>
+    </div>
+
+    <!-- Status messages -->
+    <div id="loading" class="loading hide">Loading...</div>
+    <div id="error" class="error hide"></div>
+    <div id="success" class="success hide"></div>
+
+    <!-- Submit button -->
+    <div class="submit-container">
+      <button id="submit-btn" disabled>Create Check</button>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    // Organization to proxy endpoint mapping
+    const ORG_URLS = {
+      "Lineage":   "https://cp-alert-signoff-proxy.onrender.com/lineage",
+      "Demo":      "https://cp-alert-signoff-proxy.onrender.com/demo",
+      "Emergent":  "https://cp-alert-signoff-proxy.onrender.com/emergent",
+      "Americold": "https://cp-alert-signoff-proxy.onrender.com/americold",
+      "US Cold":   "https://cp-alert-signoff-proxy.onrender.com/uscold",
+      "Envision":  "https://cp-alert-signoff-proxy.onrender.com/envision",
+      "WL Gore":   "https://cp-alert-signoff-proxy.onrender.com/wlgore"
+    };
+
+    // DOM references
+    const orgSelect = document.getElementById('org-select');
+    const nameInput = document.getElementById('name-input');
+    const descriptionInput = document.getElementById('description-input');
+    const packageSelect = document.getElementById('package-select');
+    const submitBtn = document.getElementById('submit-btn');
+    const loadingEl = document.getElementById('loading');
+    const errorEl = document.getElementById('error');
+    const successEl = document.getElementById('success');
+
+    let softwarePackages = [];
+    let selectedOrgUrl = '';
+
+    // Populate organization dropdown
+    Object.keys(ORG_URLS).forEach(function(org){
+      orgSelect.appendChild(new Option(org, org));
+    });
+
+    // Event listeners
+    orgSelect.addEventListener('change', onOrgChange);
+    nameInput.addEventListener('input', validateForm);
+    submitBtn.addEventListener('click', createCheck);
+
+    // When organization changes, load software packages
+    async function onOrgChange() {
+      const selectedOrg = orgSelect.value;
+      selectedOrgUrl = ORG_URLS[selectedOrg];
+      
+      // Reset package dropdown
+      packageSelect.innerHTML = '<option value="">Loading...</option>';
+      packageSelect.disabled = true;
+      submitBtn.disabled = true;
+      hideMessages();
+
+      if (!selectedOrg) {
+        packageSelect.innerHTML = '<option value="">Select Organization First</option>';
+        return;
+      }
+
+      showLoading();
+
+      try {
+        await loadSoftwarePackages(selectedOrg);
+        populatePackageDropdown();
+        hideLoading();
+        showSuccess('Software packages loaded successfully!');
+        setTimeout(() => { hideMessages(); }, 3000);
+        validateForm();
+
+      } catch (error) {
+        hideLoading();
+        showError('Failed to load software packages: ' + error.message);
+        packageSelect.innerHTML = '<option value="">Error loading packages</option>';
+      }
+    }
+
+    // Load software packages for the selected organization
+    async function loadSoftwarePackages(org) {
+      const url = ORG_URLS[org];
+      const query = `
+        query($filter: SoftwarePackageFilter) {
+          softwarePackages(filter: $filter) {
+            nodes {
+              id
+              name
+              slug
+            }
+          }
+        }`;
+      
+      const variables = {
+        filter: {
+          isEnabled: { equalTo: true }
+        }
+      };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch software packages: ' + response.status);
+      }
+
+      const data = await response.json();
+      if (data.errors) {
+        throw new Error('GraphQL errors: ' + data.errors.map(e => e.message).join(', '));
+      }
+
+      softwarePackages = data.data.softwarePackages.nodes || [];
+    }
+
+    // Populate the package dropdown
+    function populatePackageDropdown() {
+      packageSelect.innerHTML = '<option value="">None (no software package)</option>';
+      
+      softwarePackages
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .forEach(pkg => {
+          packageSelect.appendChild(new Option(pkg.name, pkg.id));
+        });
+
+      packageSelect.disabled = false;
+    }
+
+    // Validate form and enable/disable submit button
+    function validateForm() {
+      const isValid = orgSelect.value && nameInput.value.trim();
+      submitBtn.disabled = !isValid;
+    }
+
+    // Create the check using the mutation
+    async function createCheck() {
+      const name = nameInput.value.trim();
+      const description = descriptionInput.value.trim();
+      const selectedPackageId = packageSelect.value || null;
+
+      if (!name) {
+        showError('Please enter a check name');
+        return;
+      }
+
+      hideMessages();
+      showLoading();
+      submitBtn.disabled = true;
+
+      try {
+        // Generate slug from name (camelCase)
+        const slug = name
+          .replace(/[^a-zA-Z0-9\s]/g, '') // Remove special characters
+          .split(' ')
+          .map((word, index) => {
+            if (index === 0) return word.toLowerCase();
+            return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+          })
+          .join('');
+
+        const mutation = `
+          mutation($input: CreateCheckInput!) {
+            createCheck(input: $input) {
+              clientMutationId
+            }
+          }`;
+
+        const variables = {
+          input: {
+            check: {
+              closureMessageRequired: false,
+              description: description || '',
+              incidentsEnabled: true,
+              isEnabled: true,
+              name: name,
+              reminderIntervalSeconds: 3600,
+              severityId: 6,
+              slug: slug,
+              softwarePackageId: selectedPackageId ? parseInt(selectedPackageId) : null
+            }
+          }
+        };
+
+        const response = await fetch(selectedOrgUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: mutation, variables })
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to create check: ' + response.status);
+        }
+
+        const data = await response.json();
+        if (data.errors) {
+          throw new Error('GraphQL errors: ' + data.errors.map(e => e.message).join(', '));
+        }
+
+        hideLoading();
+        showSuccess('Check created successfully!');
+        
+        // Reset form
+        nameInput.value = '';
+        descriptionInput.value = '';
+        packageSelect.value = '';
+        validateForm();
+
+      } catch (error) {
+        hideLoading();
+        showError('Failed to create check: ' + error.message);
+        submitBtn.disabled = false;
+      }
+    }
+
+    // Utility functions for UI state management
+    function showLoading() {
+      loadingEl.classList.remove('hide');
+    }
+
+    function hideLoading() {
+      loadingEl.classList.add('hide');
+    }
+
+    function showError(message) {
+      errorEl.textContent = message;
+      errorEl.classList.remove('hide');
+    }
+
+    function showSuccess(message) {
+      successEl.textContent = message;
+      successEl.classList.remove('hide');
+    }
+
+    function hideMessages() {
+      loadingEl.classList.add('hide');
+      errorEl.classList.add('hide');
+      successEl.classList.add('hide');
+    }
+
+  })();
+  </script>
+</body>
+</html>
