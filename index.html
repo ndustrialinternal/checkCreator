@@ -9,6 +9,7 @@
       margin: 1rem; 
       max-width: 800px; 
       margin: 2rem auto; 
+      padding-left: 270px; /* Account for sidebar */
     }
            /* Navigation Sidebar */
         .sidebar {
@@ -67,11 +68,6 @@
       margin-bottom: 2rem; 
       color: #333;
     }
-    h1 { 
-      text-align: center; 
-      margin-bottom: 2rem; 
-      color: #333;
-    }
 
     /* Form styling */
     .form-container {
@@ -79,6 +75,7 @@
       padding: 2rem;
       border-radius: 8px;
       border: 1px solid #ddd;
+      margin-bottom: 3rem;
     }
     
     .form-group {
@@ -156,6 +153,76 @@
     }
     
     .hide { display: none; }
+
+    /* Table styling */
+    .table-container {
+      background: #f9f9f9;
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+
+    .table-container h2 {
+      margin-top: 0;
+      margin-bottom: 1.5rem;
+      color: #333;
+      text-align: center;
+    }
+
+    .checks-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .checks-table th,
+    .checks-table td {
+      padding: 12px 15px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+
+    .checks-table th {
+      background: #f8f9fa;
+      font-weight: bold;
+      color: #333;
+    }
+
+    .checks-table tr:hover {
+      background: #f8f9fa;
+    }
+
+    .checks-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .monitor-count {
+      text-align: center;
+      font-weight: bold;
+      color: #007bff;
+    }
+
+    .no-package {
+      font-style: italic;
+      color: #666;
+    }
+
+    .table-loading {
+      text-align: center;
+      padding: 2rem;
+      color: #666;
+    }
+
+    .table-error {
+      text-align: center;
+      padding: 2rem;
+      color: #d32f2f;
+      background: #ffebee;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>    
@@ -218,6 +285,14 @@
     </div>
   </div>
 
+  <!-- Existing Checks Table -->
+  <div class="table-container">
+    <h2>Existing Checks</h2>
+    <div id="table-content">
+      <div class="table-loading">Select an organization to view existing checks</div>
+    </div>
+  </div>
+
   <script>
   (function(){
     // Organization to proxy endpoint mapping
@@ -240,9 +315,11 @@
     const loadingEl = document.getElementById('loading');
     const errorEl = document.getElementById('error');
     const successEl = document.getElementById('success');
+    const tableContent = document.getElementById('table-content');
 
     let softwarePackages = [];
     let selectedOrgUrl = '';
+    let existingChecks = [];
 
     // Populate organization dropdown
     Object.keys(ORG_URLS).forEach(function(org){
@@ -254,7 +331,7 @@
     nameInput.addEventListener('input', validateForm);
     submitBtn.addEventListener('click', createCheck);
 
-    // When organization changes, load software packages
+    // When organization changes, load software packages and existing checks
     async function onOrgChange() {
       const selectedOrg = orgSelect.value;
       selectedOrgUrl = ORG_URLS[selectedOrg];
@@ -267,23 +344,32 @@
 
       if (!selectedOrg) {
         packageSelect.innerHTML = '<option value="">Select Organization First</option>';
+        tableContent.innerHTML = '<div class="table-loading">Select an organization to view existing checks</div>';
         return;
       }
 
       showLoading();
+      tableContent.innerHTML = '<div class="table-loading">Loading existing checks...</div>';
 
       try {
-        await loadSoftwarePackages(selectedOrg);
+        // Load both software packages and existing checks
+        await Promise.all([
+          loadSoftwarePackages(selectedOrg),
+          loadExistingChecks(selectedOrg)
+        ]);
+        
         populatePackageDropdown();
+        renderChecksTable();
         hideLoading();
-        showSuccess('Software packages loaded successfully!');
+        showSuccess('Data loaded successfully!');
         setTimeout(() => { hideMessages(); }, 3000);
         validateForm();
 
       } catch (error) {
         hideLoading();
-        showError('Failed to load software packages: ' + error.message);
+        showError('Failed to load data: ' + error.message);
         packageSelect.innerHTML = '<option value="">Error loading packages</option>';
+        tableContent.innerHTML = '<div class="table-error">Error loading checks: ' + error.message + '</div>';
       }
     }
 
@@ -325,6 +411,42 @@
       softwarePackages = data.data.softwarePackages.nodes || [];
     }
 
+    // Load existing checks for the selected organization
+    async function loadExistingChecks(org) {
+      const url = ORG_URLS[org];
+      const query = `
+        query {
+          checks {
+            nodes {
+              name
+              checkMonitors {
+                totalCount
+              }
+              softwarePackage {
+                name
+              }
+            }
+          }
+        }`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch existing checks: ' + response.status);
+      }
+
+      const data = await response.json();
+      if (data.errors) {
+        throw new Error('GraphQL errors: ' + data.errors.map(e => e.message).join(', '));
+      }
+
+      existingChecks = data.data.checks.nodes || [];
+    }
+
     // Populate the package dropdown
     function populatePackageDropdown() {
       packageSelect.innerHTML = '<option value="">None (no software package)</option>';
@@ -336,6 +458,40 @@
         });
 
       packageSelect.disabled = false;
+    }
+
+    // Render the existing checks table
+    function renderChecksTable() {
+      if (existingChecks.length === 0) {
+        tableContent.innerHTML = '<div class="table-loading">No existing checks found for this organization</div>';
+        return;
+      }
+
+      // Sort checks alphabetically by name
+      const sortedChecks = existingChecks.sort((a, b) => a.name.localeCompare(b.name));
+
+      const tableHtml = `
+        <table class="checks-table">
+          <thead>
+            <tr>
+              <th>Check Name</th>
+              <th>Number of Monitors</th>
+              <th>Software Package</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sortedChecks.map(check => `
+              <tr>
+                <td>${escapeHtml(check.name)}</td>
+                <td class="monitor-count">${check.checkMonitors.totalCount}</td>
+                <td>${check.softwarePackage ? escapeHtml(check.softwarePackage.name) : '<span class="no-package">No package</span>'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+
+      tableContent.innerHTML = tableHtml;
     }
 
     // Validate form and enable/disable submit button
@@ -417,6 +573,10 @@
         packageSelect.value = '';
         validateForm();
 
+        // Reload existing checks to show the new one
+        await loadExistingChecks(orgSelect.value);
+        renderChecksTable();
+
       } catch (error) {
         hideLoading();
         showError('Failed to create check: ' + error.message);
@@ -440,13 +600,20 @@
 
     function showSuccess(message) {
       successEl.textContent = message;
-      successEl.classList.remove('hide');
+      successEl.classList.add('hide');
     }
 
     function hideMessages() {
       loadingEl.classList.add('hide');
       errorEl.classList.add('hide');
       successEl.classList.add('hide');
+    }
+
+    // Escape HTML to prevent XSS
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
     }
 
   })();
